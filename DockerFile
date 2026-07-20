@@ -1,0 +1,24 @@
+IE11: Dockerfile optimizado Multi-stage
+
+FROM maven:3.8.5-openjdk-17-slim AS build
+WORKDIR /app
+COPY pom.xml .
+RUN mvn dependency:go-offline -B
+COPY src ./src
+
+Generar el artefacto compilado
+
+RUN mvn clean package -DskipTests
+
+Segunda etapa: Imagen ligera para producción
+
+FROM eclipse-temurin:17-jre-alpine
+WORKDIR /app
+
+Usuario seguro sin permisos de root
+
+RUN addgroup -S spring && adduser -S spring -G spring
+USER spring:spring
+COPY --from=build /app/target/*.jar app.jar
+EXPOSE 8080
+ENTRYPOINT ["java", "-jar", "app.jar"]
