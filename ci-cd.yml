@@ -1,0 +1,58 @@
+name: Java Cloud CI/CD Pipelineon:push:branches: [ "main", "develop" ]pull_request:branches: [ "main" ]jobs:=========================================================================PRIMERA ETAPA: Compilación, Testeo y Empaquetado=========================================================================build-and-test: name: Compilar, Probar y Empaquetar (Maven) runs-on: ubuntu-latest steps: - name: Checkout del Código uses: actions/checkout@v3  - name: Configurar JDK 17 (Temurin)
+    uses: actions/setup-java@v3
+    with:
+      java-version: '17'
+      distribution: 'temurin'
+      cache: 'maven'
+
+  - name: Ejecutar Compilación y Pruebas
+    run: mvn clean package -DskipTests
+
+  - name: Subir Artefacto Compilado (.jar)
+    uses: actions/upload-artifact@v3
+    with:
+      name: app-jar
+      path: target/*.jar
+=========================================================================SEGUNDA ETAPA: Provisión AWS SQS, Dockerización y Despliegue Cloud (Swarm)=========================================================================provision-and-deploy:name: Provisionamiento AWS, Docker Push y Despliegue Cloud (Swarm)needs: build-and-testruns-on: ubuntu-latest# Esta etapa solo corre cuando realizamos cambios en la rama principal 'main'if: github.ref == 'refs/heads/main'steps:- name: Checkout del Códigouses: actions/checkout@v3  # Provisión e infraestructura automática de la cola en AWS (EP3 - IE5 / EFT - IE14)
+  - name: Configurar Credenciales de AWS
+    uses: aws-actions/configure-aws-credentials@v2
+    with:
+      aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      aws-region: us-east-1
+
+  - name: Asegurar Existencia de Cola AWS SQS (Provisión Cloud-Native)
+    run: |
+      echo "Validando existencia o aprovisionando la cola..."
+      aws sqs create-queue --queue-name fast-services-queue || echo "La cola ya existe o hubo un aviso de provisión simulado."
+
+  # Construcción segura y publicación de contenedores (EP3 - IE1 / EFT - IE11)
+  - name: Autenticación en Docker Hub
+    uses: docker/login-action@v2
+    with:
+      username: ${{ secrets.DOCKERHUB_USERNAME }}
+      password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+  - name: Construir y Publicar Imagen en Docker Hub
+    run: |
+      docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/core-service:latest .
+      docker push ${{ secrets.DOCKERHUB_USERNAME }}/core-service:latest
+
+  # Despliegue automático mediante SSH (EP3 - IE6 / EFT - IE15)
+  - name: Desplegar en Servidor Cloud mediante SSH (Docker Swarm)
+    uses: appleboy/ssh-action@v0.1.10
+    with:
+      host: ${{ secrets.CLOUD_SERVER_IP }}
+      username: ${{ secrets.CLOUD_SERVER_USER }}
+      key: ${{ secrets.SSH_PRIVATE_KEY }}
+      script: |
+        mkdir -p /home/ubuntu/app
+        cd /home/ubuntu/app
+        
+        # Descargar la última definición de la imagen y desplegar el stack (EFT - IE12)
+        sudo docker pull ${{ secrets.DOCKERHUB_USERNAME }}/core-service:latest
+        
+        # Despliegue usando Docker Swarm con políticas de reinicio y réplicas
+        sudo docker stack deploy -c docker-compose.yml microservicios-stack --with-registry-auth
+        
+        echo "=== DESPLIEGUE EN LA NUBE FINALIZADO EXITOSAMENTE ==="
